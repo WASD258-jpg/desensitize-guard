@@ -25,19 +25,24 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
+import math
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_TTL_MIN = 20
 MAX_FILE_BYTES = 262_144
 MAX_DIFF_BYTES = 2 * 1024 * 1024
+MAX_TEXT_BYTES = 512 * 1024
 MAX_FINDINGS = 60
 GIT_TIMEOUT_S = 25
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -90,9 +95,16 @@ def load_rules(path: str | None = None) -> dict:
     rules_path = Path(path).expanduser() if path else DEFAULT_RULES
     with open(rules_path, "r", encoding="utf-8") as handle:
         rules = json.load(handle)
+    rules.setdefault("settings", {})
     rules.setdefault("egress", [])
     rules.setdefault("sensitive", [])
     rules.setdefault("path_rules", [])
+    rules.setdefault("archive_scan_extensions", [])
+    rules.setdefault("archive_inner_scan_extensions", [])
+    rules["_ignore"] = [re.compile(pattern) for pattern in rules["settings"].get("ignore", [])]
+    rules["_entropy_paths"] = [
+        re.compile(pattern) for pattern in rules["settings"].get("entropy_exclude_paths", [])
+    ]
     for rule in rules["egress"]:
         rule["_re"] = re.compile(rule["pattern"]) if rule.get("pattern") else None
         if rule.get("tool_name_pattern"):
@@ -102,6 +114,91 @@ def load_rules(path: str | None = None) -> dict:
     for rule in rules["path_rules"]:
         rule["_re"] = re.compile(rule["pattern"])
     return rules
+
+
+def runtime_sensitive_rules(cwd: str | None) -> list[dict]:
+    """环境相关规则：静态正则覆盖不了的"本机身份"——家目录、用户名、主机名、工作区绝对路径。
+
+    这些值因机器而异，只能运行时生成；命中说明出网内容里带着"这台机器/这个人"的指纹。
+    """
+    dynamic: list[dict] = []
+
+    def add(rule_id: str, title: str, value: str, severity: str, word_bound: bool = False) -> None:
+        if not value or len(value) < 2:
+            return
+        pattern = re.escape(value)
+        if word_bound:
+            pattern = rf"(?i)(?<![A-Za-z0-9_]){pattern}(?![A-Za-z0-9_])"
+        dynamic.append(
+            {
+                "id": rule_id,
+                "title": title,
+                "kind": "internal",
+                "severity": severity,
+                "pattern": value,
+                "_re": re.compile(pattern),
+                "_runtime": True,
+            }
+        )
+
+    home = Path.home()
+    for candidate in {str(home), str(home).replace("\\", "/")}:
+        add("local-home-path", "本机家目录绝对路径", candidate, "medium")
+    if cwd:
+        try:
+            resolved = Path(cwd).resolve()
+            for candidate in {str(resolved), str(resolved).replace("\\", "/")}:
+                add("local-workspace-path", "本机工作区绝对路径", candidate, "low")
+        except OSError:
+            pass
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = ""
+    if user and user.lower() not in {"user", "admin", "administrator", "root", "test", "runner"}:
+        add("local-username", "本机用户名", user, "medium", word_bound=True)
+    try:
+        host = socket.gethostname()
+    except OSError:
+        host = ""
+    if host and len(host) >= 4:
+        add("local-hostname", "本机主机名", host, "low", word_bound=True)
+    return dynamic
+
+
+def shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    counts: dict[str, int] = {}
+    for character in value:
+        counts[character] = counts.get(character, 0) + 1
+    length = len(value)
+    return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+def looks_high_entropy(value: str, rules: dict) -> bool:
+    settings = rules.get("settings", {})
+    if len(value) < int(settings.get("high_entropy_min_length", 40)):
+        return False
+    if re.fullmatch(r"[A-Za-z]+", value):
+        return False
+    # 必须含数字：真实密钥/哈希几乎都有数字，而 "SendGrid/Mailgun/PyPI/..." 这类文档串没有，
+    # 不加这条会把 README 里的服务名清单全报成密钥
+    if not re.search(r"\d", value):
+        return False
+    if shannon_entropy(value) < 4.2:
+        return False
+    classes = sum(
+        1 for pattern in (r"\d", r"[a-z]", r"[A-Z]", r"[^A-Za-z0-9]") if re.search(pattern, value)
+    )
+    return classes >= 3
+
+
+def entropy_excluded(rules: dict, where: str) -> bool:
+    """锁文件/压缩产物的高熵串不算泄露。where 可能是 `file:行号` 或 `zip!条目:行号`。"""
+    target = re.sub(r":\d+$", "", where or "")
+    target = target.split("!")[-1] if "!" in target else target
+    return any(pattern.search(target) for pattern in rules.get("_entropy_paths", []))
 
 
 def read_store() -> dict:
@@ -228,9 +325,58 @@ def git_root(cwd: str) -> str:
     return run_git(["rev-parse", "--show-toplevel"], cwd).strip()
 
 
+def git_identity_text(cwd: str, range_spec: str | None) -> str:
+    args = ["log", "--format=commit %h | author %an <%ae> | committer %cn <%ce> | refs %d%n%B"]
+    if range_spec:
+        args.append(range_spec)
+    return run_git(args, cwd)[:MAX_TEXT_BYTES]
+
+
+def git_identities(cwd: str, range_spec: str | None) -> list[str]:
+    args = ["log", "--format=%an <%ae>%n%cn <%ce>"]
+    if range_spec:
+        args.append(range_spec)
+    seen: list[str] = []
+    for line in run_git(args, cwd).splitlines():
+        entry = line.strip()
+        if entry and entry not in seen:
+            seen.append(entry)
+    return seen
+
+
+def git_extra_surfaces(cwd: str, range_spec: str | None) -> list[tuple[str, str]]:
+    """净值 diff 之外必须单独扫的面：逐提交补丁、提交信息与身份、.git/config。"""
+    extras: list[tuple[str, str]] = []
+    scope = f"（{range_spec}）" if range_spec else "（整仓）"
+    patch = run_git(["log", "-p", "--no-color", "-U0"] + ([range_spec] if range_spec else []), cwd)
+    if patch:
+        extras.append((f"逐提交补丁{scope}——含「加了又删」的内容", patch[:MAX_DIFF_BYTES]))
+    identity = git_identity_text(cwd, range_spec)
+    if identity:
+        extras.append((f"提交信息与作者身份{scope}——会随仓库公开", identity))
+    git_dir = run_git(["rev-parse", "--absolute-git-dir"], cwd).strip()
+    if git_dir:
+        config_path = Path(git_dir) / "config"
+        try:
+            extras.append(
+                (f".git/config{scope}——remote URL 可能内嵌令牌", config_path.read_text(encoding="utf-8", errors="replace")[:65_536])
+            )
+        except OSError:
+            pass
+    return extras
+
+
 def git_change_set(cwd: str) -> dict:
     """取"即将出网"的改动集合：优先 upstream..HEAD，其次整仓（首次出网），最后 index/工作区。"""
-    info: dict = {"root": git_root(cwd), "source": "", "text": "", "files": [], "full_scan": False}
+    info: dict = {
+        "root": git_root(cwd),
+        "source": "",
+        "text": "",
+        "files": [],
+        "full_scan": False,
+        "extras": [],
+        "identities": [],
+    }
     if not info["root"]:
         return info
     upstream = run_git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd).strip()
@@ -238,8 +384,10 @@ def git_change_set(cwd: str) -> dict:
         info["source"] = f"git diff {upstream}..HEAD"
         info["text"] = run_git(["diff", "--unified=0", f"{upstream}..HEAD"], cwd)
         names = run_git(["diff", "--name-only", f"{upstream}..HEAD"], cwd)
+        range_spec = f"{upstream}..HEAD"
     else:
         tracked = [line.strip() for line in run_git(["ls-files"], cwd).splitlines() if line.strip()]
+        range_spec = None
         if tracked:
             # 无 upstream：远端什么都没有，本次 push 会把整个仓库发出去 → 逐文件全文扫描
             info["source"] = "整仓首次出网（无 upstream）：git ls-files 逐文件扫描"
@@ -256,6 +404,8 @@ def git_change_set(cwd: str) -> dict:
     info["text"] = info["text"][:MAX_DIFF_BYTES]
     if not info["full_scan"]:
         info["files"] = sorted({line.strip() for line in names.splitlines() if line.strip()})
+    info["extras"] = git_extra_surfaces(cwd, range_spec)
+    info["identities"] = git_identities(cwd, range_spec)
     return info
 
 
@@ -328,23 +478,45 @@ def line_has_allow_marker(text: str, position: int) -> bool:
     return ALLOW_MARKER in line
 
 
-def scan_text(rules: dict, text: str, where: str) -> list[dict]:
+def rule_is_ignored(rules: dict, value: str) -> bool:
+    return any(pattern.search(value) for pattern in rules.get("_ignore", []))
+
+
+def scan_text(rules: dict, text: str, where: str, counters: dict | None = None) -> list[dict]:
     findings: list[dict] = []
     if not text:
         return findings
+    with_lines = "\n" in text
+    entropy_budget = int(rules.get("settings", {}).get("high_entropy_max_per_file", 5))
     for rule in rules["sensitive"]:
         for match in rule["_re"].finditer(text):
             if line_has_allow_marker(text, match.start()):
                 continue
             value = match.group(0)
+            if rule_is_ignored(rules, value):
+                continue
+            if rule.get("requires_entropy"):
+                if entropy_excluded(rules, where):
+                    continue
+                if not looks_high_entropy(value, rules):
+                    continue
+                if counters is not None:
+                    used = counters.get("high-entropy-token", 0)
+                    if used >= entropy_budget:
+                        continue
+                    counters["high-entropy-token"] = used + 1
+            severity = rule["severity"]
             kind = "email" if rule["id"] == "email" else ("pii" if rule["kind"] == "pii" else rule["kind"])
+            location = where
+            if with_lines and not re.search(r":\d+$", where):
+                location = f"{where}:{text.count(chr(10), 0, match.start()) + 1}"
             findings.append(
                 {
                     "rule": rule["id"],
                     "title": rule["title"],
                     "kind": rule["kind"],
-                    "severity": rule["severity"],
-                    "where": where,
+                    "severity": severity,
+                    "where": location,
                     "sample": mask_value(kind, value),
                 }
             )
@@ -354,6 +526,7 @@ def scan_text(rules: dict, text: str, where: str) -> list[dict]:
 
 
 def scan_paths(rules: dict, paths: list[str]) -> list[dict]:
+    """路径本身也当内容扫：文件名里带手机号/姓名/绝对路径同样算泄露。"""
     findings: list[dict] = []
     for item in paths:
         for rule in rules["path_rules"]:
@@ -368,15 +541,52 @@ def scan_paths(rules: dict, paths: list[str]) -> list[dict]:
                         "sample": Path(item).name,
                     }
                 )
+        findings += scan_text(rules, item, item)
+    return findings
+
+
+def scan_archive(rules: dict, path: Path) -> list[dict]:
+    """展开 zip 系（zip/xlsx/docx/pptx/jar/apk/whl/epub），扫内部文本条目。"""
+    findings: list[dict] = []
+    inner_ext = tuple(rules.get("archive_inner_scan_extensions", []))
+    max_entries = int(rules.get("archive_max_entries", 40))
+    max_entry_bytes = int(rules.get("archive_max_entry_bytes", 131_072))
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for index, info in enumerate(archive.infolist()):
+                if index >= max_entries:
+                    break
+                if info.is_dir() or info.file_size > max_entry_bytes * 4:
+                    continue
+                if inner_ext and not info.filename.lower().endswith(inner_ext):
+                    continue
+                try:
+                    raw = archive.read(info.filename)[:max_entry_bytes]
+                except (OSError, RuntimeError, zipfile.BadZipFile):
+                    continue
+                text = raw.decode("utf-8", errors="replace")
+                if info.filename.lower().endswith((".xml", ".rels", ".html")):
+                    text = re.sub(r"<[^>]{0,200}>", " ", text)
+                findings += scan_text(rules, text, f"{path}!{info.filename}")
+                findings += scan_paths(rules, [info.filename])
+    except (OSError, zipfile.BadZipFile, NotImplementedError):
+        return findings
     return findings
 
 
 def scan_files(rules: dict, paths: list[str]) -> list[dict]:
     skip = {ext.lower() for ext in rules.get("skip_scan_extensions", [])}
+    archives = {ext.lower() for ext in rules.get("archive_scan_extensions", [])}
     findings: list[dict] = []
     for item in paths:
         path = Path(item)
-        if path.suffix.lower() in skip:
+        suffix = path.suffix.lower()
+        if suffix in archives:
+            findings += scan_archive(rules, path)
+            if len(findings) >= MAX_FINDINGS:
+                return findings
+            continue
+        if suffix in skip:
             continue
         try:
             size = path.stat().st_size
@@ -398,8 +608,9 @@ def scan_files(rules: dict, paths: list[str]) -> list[dict]:
         if b"\x00" in raw[:4096]:
             continue
         text = raw.decode("utf-8", errors="replace")
+        counters: dict = {}
         for index, line in enumerate(text.splitlines(), start=1):
-            for finding in scan_text(rules, line, f"{item}:{index}"):
+            for finding in scan_text(rules, line, f"{item}:{index}", counters):
                 findings.append(finding)
                 if len(findings) >= MAX_FINDINGS:
                     return findings
@@ -410,33 +621,59 @@ MAX_FULL_SCAN_FILES = 300
 
 
 def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
+    # 环境相关规则（本机用户名/家目录/主机名/工作区路径）只能在运行时按当前环境生成
+    rules = {**rules, "sensitive": rules["sensitive"] + runtime_sensitive_rules(cwd)}
     hits = classify_egress(rules, tool_name, command)
-    change = {"root": "", "source": "", "files": [], "full_scan": False}
+    change: dict = {
+        "root": "",
+        "source": "",
+        "files": [],
+        "full_scan": False,
+        "extras": [],
+        "identities": [],
+    }
     label = remote_label(command)
     is_push = any(rule["id"] == "git-push" for rule in hits)
     if is_push:
         change = git_change_set(cwd)
     files = candidate_files(command, cwd)
     findings: list[dict] = []
+    surfaces: list[str] = []
     if is_push:
         if change.get("full_scan"):
-            # 整仓首次出网：按路径规则 + 逐文件全文扫描
+            # 整仓首次出网：按路径规则 + 逐文件全文扫描（含压缩包展开）
             relative = change.get("files", [])[:MAX_FULL_SCAN_FILES]
             absolute = [str(Path(change["root"]) / item) for item in relative]
             findings += scan_paths(rules, relative)
             findings += scan_files(rules, absolute)
+            surfaces.append(f"整仓逐文件全文扫描（{len(relative)} 个文件，含压缩包展开）")
         else:
             findings += scan_text(rules, change.get("text", ""), change.get("source") or "git diff")
             findings += scan_paths(rules, change.get("files", []))
-    findings += scan_paths(rules, files)
-    findings += scan_files(rules, files)
+            surfaces.append(f"净值 diff（{len(change.get('files', []))} 个文件）")
+        for extra_label, extra_text in change.get("extras", []):
+            findings += scan_text(rules, extra_text, extra_label)
+            surfaces.append(extra_label.split("——")[0])
+    if files:
+        findings += scan_paths(rules, files)
+        findings += scan_files(rules, files)
+        surfaces.append(f"命令行指向的 {len(files)} 个本地文件")
     deduped: list[dict] = []
     seen: set[tuple[str, str]] = set()
+    by_sample: dict[tuple[str, str], dict] = {}
     for finding in findings:
         key = (finding["rule"], finding["where"])
         if key in seen:
             continue
         seen.add(key)
+        sample_key = (finding["rule"], finding["sample"])
+        existing = by_sample.get(sample_key)
+        if existing is not None:
+            # 同一个值在多个扫描面重复出现（净值 diff / 逐提交补丁 / 文件行）时折叠计数，避免刷屏
+            existing["occurrences"] = existing.get("occurrences", 1) + 1
+            continue
+        finding["occurrences"] = 1
+        by_sample[sample_key] = finding
         deduped.append(finding)
     severity_rank = {"high": 0, "medium": 1, "low": 2}
     deduped.sort(key=lambda item: severity_rank.get(item["severity"], 3))
@@ -454,6 +691,8 @@ def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
         "diff_source": change.get("source", ""),
         "outgoing_files": change.get("files", [])[:50],
         "candidate_files": files,
+        "identities": change.get("identities", []),
+        "scan_surfaces": surfaces,
         "findings": deduped,
         "counts": counts,
         "cmd_key": command_hash(command, change.get("root", "")),
@@ -478,13 +717,19 @@ def human_report(report: dict) -> str:
         lines.append(f"- 上传文件（{len(report['candidate_files'])}）：{preview}")
     counts = report["counts"]
     lines.append(f"- 敏感命中：high={counts.get('high', 0)} medium={counts.get('medium', 0)} low={counts.get('low', 0)}")
+    if report.get("identities"):
+        lines.append(f"- 提交者身份（会随仓库公开）：{'；'.join(report['identities'][:5])}")
+    if report.get("scan_surfaces"):
+        lines.append(f"- 已扫面：{' / '.join(report['scan_surfaces'])}")
     if report["findings"]:
         lines.append("")
         lines.append("| 严重度 | 类别 | 位置 | 脱敏样例 |")
         lines.append("| --- | --- | --- | --- |")
         for finding in report["findings"][:30]:
+            times = finding.get("occurrences", 1)
+            suffix = f" ×{times}" if times > 1 else ""
             lines.append(
-                f"| {finding['severity']} | {finding['title']} | `{finding['where'][:120]}` | `{finding['sample']}` |"
+                f"| {finding['severity']} | {finding['title']} | `{finding['where'][:120]}`{suffix} | `{finding['sample']}` |"
             )
         if len(report["findings"]) > 30:
             lines.append(f"| … | 其余 {len(report['findings']) - 30} 条省略 | | |")

@@ -31,8 +31,8 @@ New-Item -ItemType Directory -Path $repo -Force | Out-Null
 Push-Location $repo
 try {
   & git init -q 2>&1 | Out-Null
-  # fixture 故意不在文件里写成完整字面量：本仓库自身被脱敏扫描时不产生命中，运行时才拼出来
-  $FixtureKey = "sk-" + "FIXTURE" + "-NOT-A-REAL-KEY-1111"
+  # fixture 故意不在文件里写成完整字面量（否则本仓库自身扫描就会命中）；运行时才拼出来
+  $FixtureKey = "sk-" + "live" + "0123456789abcdefghijklmnopqrstuv"
   $FixturePhone = "139" + "00000000"
   $FixtureId = "110101" + "199003070000"
   $FixtureEmail = "fixture" + "@" + "example.com"

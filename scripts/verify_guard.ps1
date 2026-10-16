@@ -97,8 +97,8 @@ Check "off 模式无输出（直接放行）" ([string]::IsNullOrWhiteSpace(($of
 Remove-Item Env:\DESENSITIZE_GUARD_MODE
 
 Write-Host "`n=== 7. 敏感内容扫描 ===" -ForegroundColor Cyan
-# fixture 故意不在文件里写成完整字面量：本仓库自身被脱敏扫描时不产生命中，运行时才拼出来
-$FixtureKey = "sk-" + "FIXTURE" + "-NOT-A-REAL-KEY-0000"
+# fixture 故意不在文件里写成完整字面量（否则本仓库自身扫描就会命中）；运行时才拼出来
+$FixtureKey = "sk-" + "live" + "0123456789abcdefghijklmnopqrstuv"
 $FixturePhone = "138" + "00000000"
 $FixtureId = "110101" + "199003070000"
 $tmp = Join-Path $TempHome "leak.env"

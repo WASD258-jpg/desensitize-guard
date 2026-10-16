@@ -127,26 +127,56 @@ python $G hook --dialect claude|codex|dsh-native       # 供 hook/插件调用�
 环境开关：`DESENSITIZE_GUARD_MODE=gate|warn|off`、`DESENSITIZE_GUARD_HOME=<状态目录>`（默认 `$DSH_HOME/desensitize-guard`）、
 `DESENSITIZE_GUARD_TTL_MIN=20`。
 
-## 判定规则
+## 判定规则与覆盖范围
 
-`rules/rules.json` 三段，改文件即时生效（无需重启）：
+`rules/rules.json`（settings/egress/sensitive/path_rules），改文件即时生效（无需重启）。
 
-- **egress**：出网动作正则（git push / git remote / gh release,gist,pr / curl,wget 上传 / scp,rsync,sftp,nc / aws,az,gcloud,gsutil,rclone,ossutil / docker,npm,twine,vercel,netlify / PowerShell 上传 / POST 本地文件）+ 外发类 MCP 工具名模式。
-- **sensitive**：密钥（OpenAI/Anthropic/GitHub/AWS/Slack/Google/JWT/PEM/带口令连接串/Webhook）、
-  PII（身份证、手机号、邮箱、银行卡、学号工号、姓名、地址）、内网信息（私网 IP、内部域名、本机用户名路径）。
-- **path_rules**：`.env*`、`.credentials.yaml`、`id_rsa`、`.npmrc` 等凭据文件名，以及 `.xlsx/.csv/.sql/.bak` 等批量个人数据文件。
+**扫描面**（`git push` 时不只是净值 diff）：
 
-采集范围：`git push` 用 `git diff <upstream>..HEAD`（无 upstream 时退化为 index + 工作区），
-其余命令从参数里解析被上传的本地文件（`-T`、`--upload-file`、`-F file=@…`、`--data-binary @…` 等）。
-样例一律掩码后再进对话，完整密钥不会出现在报告或转录里。
+| 扫描面 | 说明 |
+| --- | --- |
+| 净值 diff | `git diff <upstream>..HEAD`；无 upstream 时改为**整仓逐文件全文扫描** |
+| 逐提交补丁 | `git log -p` —— 抓「**加了又删**」的密钥（净值 diff 里看不到，只扫净值必漏） |
+| 提交信息与作者身份 | 提交信息正文、作者/提交者 `Name <email>`、分支/标签名 —— 这些**会随仓库公开** |
+| `.git/config` | remote URL 里内嵌的令牌（`https://user:***@host/...`） |
+| 命令行指向的本地文件 | `-T` / `--upload-file` / `-F file=@…` / `--data-binary @…` 等参数解析 |
+| 压缩包内部 | `.zip/.xlsx/.docx/.pptx/.jar/.apk/.whl/.epub` 展开后扫文本条目（XML 去标签），以 `包!条目` 定位 |
+| 环境相关动态规则 | 运行时生成：本机家目录、用户名、主机名、**工作区绝对路径** —— 静态正则做不到这一类 |
 
-## 已知限制
+**已覆盖的敏感类型**：
+
+- 密钥/令牌指纹：OpenAI（含 `sk-proj/svcacct/admin`）、Anthropic、GitHub（PAT/`ghs_`/`ghu_`）、GitLab PAT、AWS（`AKIA/ASIA/AGPA/AIDA/AROA` + secret 赋值）、阿里云 `LTAI`、腾讯云 `AKID`、Stripe、Twilio、SendGrid、Mailgun、npm、PyPI、Discord bot、Telegram bot、Slack（`xox*/xapp-`）、Google API Key、GCP 服务账号 JSON、Azure AccountKey/SAS、Vault、New Relic、Postman、PlanetScale、Grafana、DigitalOcean、HuggingFace、Shopify、Square、Sentry DSN、Firebase FCM、Cloudinary、PEM/OpenSSH/PGP 私钥、JSON 内联私钥、kubeconfig 内嵌证书数据、JWT、`Authorization: Bearer/Basic`、URL 内嵌用户名口令、带口令连接串、预签名 URL（AWS/GCS）、群机器人 Webhook、通用「密钥赋值」、加密钱包私钥/助记词
+- PII：中国身份证、手机号、座机、邮箱、银行卡、美国 SSN、IBAN、车牌、学号/工号、真实姓名、地址、护照/证件/社保字段、QQ/微信
+- 内网/位置：私网 IP、内部域名、内部治理端点（jenkins/gitlab/jira/grafana…）、Windows 用户目录（**两种分隔符**）、Unix/macOS 家目录、UNC/WSL 网络路径、其他盘符绝对路径
+- 文件类型：`.env*`、`.credentials.*`、`id_rsa`、`.npmrc/.pypirc/.netrc/.pgpass/.git-credentials`、`.aws/credentials`、`.kube/config`、`kubeconfig*`、`service-account*.json`、`.terraform/`、`*.tfstate/*.tfvars`、`*.pem/*.p12/*.pfx/*.key/*.jks/*.kdbx/*.ovpn`、浏览器 Cookies/`Login Data`/`*.har/*.pcap`、`*.xlsx/*.csv/*.sql/*.bak/*.docx/*.pdf/*.log`
+- 未知格式：高熵长串（≥40 位、≥3 类字符、香农熵 ≥4.2），锁文件/lockfile/min.js 已排除以降噪
+
+**降噪机制**：行内 `desensitize-guard:allow` 豁免该行；`settings.ignore` 正则豁免（默认忽略 `example.com`/保留域名/`noreply@github.com`/含 `FIXTURE` 的合成值）；`settings.entropy_exclude_paths` 排除锁文件。
+
+```powershell
+# 验证覆盖度（21 项）与既有回归（22 项 + 集成 + 插件契约）
+pwsh -File .\scripts\verify_coverage.ps1
+pwsh -File .\scripts\verify_guard.ps1
+pwsh -File .\scripts\verify_integration.ps1
+node .\scripts\verify_dsh_plugin.mjs
+```
+
+## 结构性不覆盖（别把它当 DLP）
 
 - **skill 本身不可强制**：模型可能不加载 skill、或忘了问。真正的兜底是 hook/插件；skill 负责把交互流程讲清楚。
 - **Codex 没有 `ask`**：只能 `deny` + 理由，然后靠模型去问用户。可靠但多一轮往返。
 - **本机 dsh 的 hooks.json 桥接已被 purge 改成放行**：想恢复"桥接也能拦"，需 `purge_revert`（会一并撤销其它清洗）；
+
   用原生插件路线即可，不必动 purge。
 - **hook 是护栏不是铁笼**：换一条等价命令（网页上传、邮件、`gh api`）仍要各自被规则覆盖；规则表按需扩充。
 - **`--note` 靠模型自觉填写**：审计能记录"谁在何时放行了哪条命令"，但无法证明用户真的答复过；
   需要更强保证时把 `approve` 改成需要终端交互（读一次本地确认码）。
-- 大文件、二进制只做文件名规则判定，不做逐行扫描（`skip_scan_extensions` 控制）。
+- **二进制/图片不解析内容**：图片（截图里的密钥）、加密压缩包、`.pcap` 载荷、PDF 正文只做文件名判定，不做 OCR / 解密。
+- **未识别格式的密钥仍可能漏**：高熵规则只覆盖 ≥40 位且 ≥3 类字符的串；短令牌、纯字母长串（如某些 API key）、
+  被 base64 二次编码的密钥、被拆散拼接的密钥都可能漏检。
+- **远端历史不在范围**：只扫"这次要发出去的东西"；仓库里早已存在的老密钥需要 `git filter-repo` 之类处理，本工具不管。
+- **大文件与超量文件截断**：单文件 >256KB、压缩包条目 >40 个 / 单条目 >128KB、整仓 >300 个文件时只扫一部分。
+- **非 git 出网依赖参数可解析**：`curl -F` / `-T` 这类能从命令行拿到路径；如果路径是运行时拼出来的（变量、脚本内生成），
+  命令行里看不到就不在扫描面内。
+- **Git LFS 指针**：仓库里是 lfs 指针文件，真实内容在 `.git/lfs/objects`，当前不跟进去扫。
+

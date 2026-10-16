@@ -1,6 +1,32 @@
 {
-  "version": 1,
-  "comment": "出网动作判定 + 敏感内容模式。三端（dsh / Claude Code / Codex）共用同一份。",
+  "version": 2,
+  "comment": "出网动作判定 + 敏感内容模式。三端（dsh / Claude Code / Codex）共用同一份。v2 大幅扩充密钥指纹、绝对路径与结构性扫描目标。",
+  "settings": {
+    "ignore": [
+      "(?i)@example\\.(com|org|net)",
+      "(?i)@.*\\.(invalid|test|localdomain)",
+      "(?i)@(users\\.)?noreply\\.github\\.com",
+      "(?i)\\b(sk-|gh[pousr]_|npm_|AKIA)[A-Za-z0-9_\\-]*FIXTURE[A-Za-z0-9_\\-]*\\b"
+    ],
+    "high_entropy_enabled": true,
+    "high_entropy_min_length": 40,
+    "high_entropy_max_per_file": 5,
+    "entropy_exclude_paths": [
+      "rules\\.json$",
+      "package-lock\\.json$",
+      "pnpm-lock\\.yaml$",
+      "yarn\\.lock$",
+      "Cargo\\.lock$",
+      "poetry\\.lock$",
+      "composer\\.lock$",
+      "go\\.sum$",
+      "\\.min\\.(js|css)$",
+      "\\.map$",
+      "\\.svg$",
+      "\\.lock$",
+      "uv\\.lock$"
+    ]
+  },
   "egress": [
     {
       "id": "git-push",
@@ -10,8 +36,8 @@
     },
     {
       "id": "git-remote-add",
-      "title": "git remote 新增/改向 / lfs push",
-      "pattern": "\\bgit\\b[^|;&]*?\\b(remote\\s+(add|set-url)|lfs\\s+push|send-email\\s+--smtp)\\b",
+      "title": "git remote 新增/改向 / lfs push / send-email",
+      "pattern": "\\bgit\\b[^|;&]*?\\b(remote\\s+(add|set-url)|lfs\\s+push|send-email\\s+--smtp|bundle\\s+create)\\b",
       "severity": "high"
     },
     {
@@ -29,19 +55,19 @@
     {
       "id": "cloud-upload",
       "title": "云存储 / 制品库上传",
-      "pattern": "\\b(aws|az|gcloud|gsutil|rclone|doctl|oci|aliyun|ossutil|coscmd|mc)\\b[^|;&]*?\\b(s3\\s+(cp|sync|mv)|cp|sync|copy|upload|put-object|storage\\s+(cp|rsync)|blob\\s+upload|oss\\s+cp|push)\\b",
+      "pattern": "\\b(aws|az|gcloud|gsutil|rclone|doctl|oci|aliyun|ossutil|coscmd|mc|huggingface-cli|hf)\\b[^|;&]*?\\b(s3\\s+(cp|sync|mv)|cp|sync|copy|upload|put-object|storage\\s+(cp|rsync)|blob\\s+upload|oss\\s+cp|push)\\b",
       "severity": "high"
     },
     {
       "id": "artifact-publish",
       "title": "包/镜像/站点发布",
-      "pattern": "\\b(npm|pnpm|yarn|twine|poetry|cargo|docker|podman|vercel|netlify|firebase|surge|hexo|gem)\\b[^|;&]*?\\b(publish|push|deploy|release|upload)\\b",
+      "pattern": "\\b(npm|pnpm|yarn|twine|poetry|cargo|docker|podman|vercel|netlify|firebase|surge|hexo|gem|uv)\\b[^|;&]*?\\b(publish|push|deploy|release|upload)\\b",
       "severity": "high"
     },
     {
       "id": "file-transfer",
       "title": "scp/sftp/rsync/nc 直连传输",
-      "pattern": "\\b(scp|pscp|sftp|rsync|nc|ncat|netcat|ftp|tftp|smbclient|curl-upload)\\b",
+      "pattern": "\\b(scp|pscp|sftp|rsync|nc|ncat|netcat|ftp|tftp|smbclient)\\b",
       "severity": "high"
     },
     {
@@ -70,42 +96,119 @@
       "title": "OpenAI/兼容网关密钥",
       "kind": "secret",
       "severity": "high",
-      "pattern": "sk-[A-Za-z0-9_\\-]{16,}"
+      "pattern": "(sk-(proj|svcacct|admin)-[A-Za-z0-9_\\-]{20,}|sk-[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_\\-]{20,})"
     },
     {
       "id": "anthropic-key",
       "title": "Anthropic 密钥",
       "kind": "secret",
       "severity": "high",
-      "pattern": "sk-ant-[A-Za-z0-9_\\-]{16,}"
+      "pattern": "sk-ant-[A-Za-z0-9_\\-]{20,}"
     },
     {
       "id": "github-token",
-      "title": "GitHub token",
+      "title": "GitHub token（PAT/App/Action）",
       "kind": "secret",
       "severity": "high",
       "pattern": "(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})"
     },
     {
-      "id": "aws-akid",
-      "title": "AWS Access Key ID",
+      "id": "gitlab-token",
+      "title": "GitLab token",
       "kind": "secret",
       "severity": "high",
-      "pattern": "AKIA[0-9A-Z]{16}"
+      "pattern": "glpat-[A-Za-z0-9_\\-]{20,}"
+    },
+    {
+      "id": "aws-akid",
+      "title": "AWS 访问密钥 ID（长期/临时）",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}"
     },
     {
       "id": "aws-secret",
-      "title": "AWS secret / 通用云密钥赋值",
+      "title": "AWS secret key 赋值",
       "kind": "secret",
       "severity": "high",
       "pattern": "(?i)aws_?(secret|access)_?key\\s*[:=]\\s*['\"]?[A-Za-z0-9/+=]{20,}"
     },
     {
-      "id": "slack-token",
-      "title": "Slack token",
+      "id": "alibaba-aliyun-ak",
+      "title": "阿里云 AccessKey",
       "kind": "secret",
       "severity": "high",
-      "pattern": "xox[baprs]-[A-Za-z0-9-]{10,}"
+      "pattern": "(LTAI[A-Za-z0-9]{12,}|LTAF[A-Za-z0-9]{12,})"
+    },
+    {
+      "id": "tencent-cloud-ak",
+      "title": "腾讯云 SecretId",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(AKID[A-Za-z0-9]{13,}|AKID[A-Za-z0-9]{20,})"
+    },
+    {
+      "id": "stripe-key",
+      "title": "Stripe 密钥",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(sk|rk)_(live|test)_[A-Za-z0-9]{20,}|whsec_[A-Za-z0-9]{20,}"
+    },
+    {
+      "id": "twilio-key",
+      "title": "Twilio SID/密钥",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(AC|SK)[0-9a-fA-F]{32}"
+    },
+    {
+      "id": "sendgrid-key",
+      "title": "SendGrid API Key",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "SG\\.[A-Za-z0-9_\\-]{16,}\\.[A-Za-z0-9_\\-]{30,}"
+    },
+    {
+      "id": "mailgun-key",
+      "title": "Mailgun 密钥",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "key-[0-9a-zA-Z]{28,}"
+    },
+    {
+      "id": "npm-token",
+      "title": "npm token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "npm_[A-Za-z0-9]{30,}"
+    },
+    {
+      "id": "pypi-token",
+      "title": "PyPI token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\\-]{20,}"
+    },
+    {
+      "id": "discord-bot-token",
+      "title": "Discord Bot token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "[MN][A-Za-z\\d]{23}\\.[\\w\\-]{6}\\.[\\w\\-]{27,}"
+    },
+    {
+      "id": "telegram-bot-token",
+      "title": "Telegram Bot token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "\\b\\d{8,10}:AA[A-Za-z0-9_\\-]{33}"
+    },
+    {
+      "id": "slack-token",
+      "title": "Slack token / app token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "xox[baprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     },
     {
       "id": "google-api-key",
@@ -115,47 +218,189 @@
       "pattern": "AIza[0-9A-Za-z\\-_]{35}"
     },
     {
-      "id": "private-key-block",
-      "title": "私钥块（PEM）",
+      "id": "gcp-service-account",
+      "title": "GCP 服务账号凭据",
       "kind": "secret",
       "severity": "high",
-      "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+      "pattern": "\"type\"\\s*:\\s*\"service_account\""
+    },
+    {
+      "id": "azure-storage-key",
+      "title": "Azure 存储 AccountKey / SAS",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(?i)(AccountKey=[A-Za-z0-9+/=]{60,}|\\?sv=\\d{4}-\\d{2}-\\d{2}&s[sr]=[a-z]&sig=[A-Za-z0-9%+/=]{20,})"
+    },
+    {
+      "id": "vault-token",
+      "title": "HashiCorp Vault token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(hvs\\.[A-Za-z0-9_\\-]{20,}|hvb\\.[A-Za-z0-9_\\-]{20,})"
+    },
+    {
+      "id": "newrelic-key",
+      "title": "New Relic User API Key",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "NRAK-[A-Z0-9]{20,}"
+    },
+    {
+      "id": "postman-key",
+      "title": "Postman API Key",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "PMAK-[a-f0-9]{24}-[a-f0-9]{30,}"
+    },
+    {
+      "id": "planetscale-token",
+      "title": "PlanetScale token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "pscale_tkn_[A-Za-z0-9_\\-]{30,}"
+    },
+    {
+      "id": "grafana-token",
+      "title": "Grafana 服务账号 token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "glsa_[A-Za-z0-9]{30,}"
+    },
+    {
+      "id": "digitalocean-token",
+      "title": "DigitalOcean token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "do[po]_v1_[a-f0-9]{60,}"
+    },
+    {
+      "id": "huggingface-token",
+      "title": "HuggingFace token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "hf_[A-Za-z0-9]{30,}"
+    },
+    {
+      "id": "shopify-token",
+      "title": "Shopify token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "shp(at|ca|pa|ss)_[a-f0-9]{30,}"
+    },
+    {
+      "id": "square-token",
+      "title": "Square 访问令牌",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(EAAA|sq0atp-|sq0csp-)[A-Za-z0-9_\\-]{20,}"
+    },
+    {
+      "id": "sentry-dsn",
+      "title": "Sentry DSN",
+      "kind": "secret",
+      "severity": "medium",
+      "pattern": "https://[0-9a-f]{32}@o\\d+\\.(ingest\\.)?sentry\\.io/\\d+"
+    },
+    {
+      "id": "firebase-fcm-key",
+      "title": "Firebase/FCM 服务端 Key",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "AAAA[A-Za-z0-9_\\-]{7}:[A-Za-z0-9_\\-]{100,}"
+    },
+    {
+      "id": "cloudinary-url",
+      "title": "Cloudinary 凭据 URL",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "cloudinary://\\d{6,}:[A-Za-z0-9_\\-]{10,}@"
+    },
+    {
+      "id": "private-key-block",
+      "title": "私钥块（PEM/OpenSSH/PGP）",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "-----BEGIN [A-Z ]*(PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----"
+    },
+    {
+      "id": "private-key-inline",
+      "title": "JSON 内联私钥（k8s/GCP）",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "\"(private_key|privateKey|client-key-data)\"\\s*:\\s*\"?(-----BEGIN|[A-Za-z0-9+/=]{100,})"
+    },
+    {
+      "id": "kubeconfig-data",
+      "title": "kubeconfig 内嵌证书/密钥数据",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(?i)(certificate-authority-data|client-certificate-data)\\s*:\\s*[A-Za-z0-9+/=]{80,}"
     },
     {
       "id": "jwt",
-      "title": "JWT / Bearer 凭证",
+      "title": "JWT",
       "kind": "secret",
       "severity": "high",
-      "pattern": "(eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{6,})"
+      "pattern": "eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{6,}"
     },
     {
       "id": "bearer-header",
-      "title": "Authorization: Bearer",
+      "title": "Authorization: Bearer / Basic",
       "kind": "secret",
       "severity": "high",
-      "pattern": "(?i)authorization\\s*:\\s*bearer\\s+[A-Za-z0-9._\\-]{12,}"
+      "pattern": "(?i)authorization\\s*:\\s*(bearer|basic)\\s+[A-Za-z0-9._\\-+/=]{12,}"
     },
     {
-      "id": "generic-secret-assign",
-      "title": "疑似密钥/口令赋值",
+      "id": "url-userinfo",
+      "title": "URL 内嵌用户名口令/令牌",
       "kind": "secret",
       "severity": "high",
-      "comment": "要求赋的值是 ≥12 位的无调用语法串，避免把 `token = find_token(x)` 这类代码当成密钥",
-      "pattern": "(?i)\\b(api[_-]?key|secret|token|passwd|password|pwd|access[_-]?key|client[_-]?secret|auth[_-]?token)\\b\\s*[:=]\\s*[\"']?[A-Za-z0-9/+=_\\-]{12,}"
+      "comment": "口令段排除反斜杠与括号，避免把规则文本/文档占位符网址误判",
+      "pattern": "(?i)\\b[a-z][a-z0-9+.\\-]*://[^/\\s:@]{2,}:[^@\\s/\\\\{}\\[\\]()<>]{4,}@"
     },
     {
       "id": "db-url-credential",
       "title": "带口令的连接串",
       "kind": "secret",
       "severity": "high",
-      "pattern": "(?i)(mysql|mariadb|postgres|postgresql|mongodb|redis|amqp|mssql)://[^\\s:@/]+:[^\\s@/]+@"
+      "pattern": "(?i)(mysql|mariadb|postgres|postgresql|mongodb(\\+srv)?|redis|amqp|mssql|clickhouse|influxdb)://[^\\s:@/]+:[^\\s@/]+@"
+    },
+    {
+      "id": "presigned-url",
+      "title": "对象存储预签名 URL",
+      "kind": "secret",
+      "severity": "medium",
+      "pattern": "(?i)[?&](X-Amz-Signature|X-Amz-Credential|X-Goog-Signature|X-Goog-Credential)=[A-Za-z0-9%_\\-]{16,}"
     },
     {
       "id": "webhook-url",
       "title": "群机器人 / Webhook 地址",
       "kind": "secret",
       "severity": "medium",
-      "pattern": "https://(discord(app)?\\.com/api/webhooks|open\\.feishu\\.cn/open-apis/bot|oapi\\.dingtalk\\.com/robot|hooks\\.slack\\.com)[^\\s\"']*"
+      "pattern": "https://(discord(app)?\\.com/api/webhooks|open\\.feishu\\.cn/open-apis/bot|oapi\\.dingtalk\\.com/robot|hooks\\.slack\\.com|qyapi\\.weixin\\.qq\\.com/cgi-bin/webhook)[^\\s\"']*"
+    },
+    {
+      "id": "generic-secret-assign",
+      "title": "疑似密钥/口令赋值",
+      "kind": "secret",
+      "severity": "high",
+      "comment": "要求赋的值是 ≥12 位的无调用语法串，避免把 token = find_token(x) 这类代码当成密钥",
+      "pattern": "(?i)\\b(api[_-]?key|apikey|secret|token|passwd|password|pwd|access[_-]?key|client[_-]?secret|auth[_-]?token|private[_-]?key|encryption[_-]?key|signing[_-]?key|app[_-]?secret|consumer[_-]?secret|session[_-]?secret)\\b\\s*[:=]\\s*[\"']?[A-Za-z0-9/+=_\\-]{12,}"
+    },
+    {
+      "id": "wallet-private-key",
+      "title": "加密钱包私钥/助记词",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(\\b0x[a-fA-F0-9]{64}\\b|\\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\\b)"
+    },
+    {
+      "id": "bip39-mnemonic",
+      "title": "疑似助记词（12/24 词）",
+      "kind": "secret",
+      "severity": "medium",
+      "comment": "宁可多报；命中时按助记词处理",
+      "pattern": "(?m)^\\s*(?:[a-z]{3,8}[ \\t]+){11}[a-z]{3,8}\\s*$|^\\s*(?:[a-z]{3,8}[ \\t]+){23}[a-z]{3,8}\\s*$"
     },
     {
       "id": "cn-id-card",
@@ -172,6 +417,13 @@
       "pattern": "\\b1[3-9]\\d{9}\\b"
     },
     {
+      "id": "cn-landline",
+      "title": "座机号（含区号）",
+      "kind": "pii",
+      "severity": "low",
+      "pattern": "\\b0\\d{2,3}-?\\d{7,8}\\b"
+    },
+    {
       "id": "email",
       "title": "邮箱地址",
       "kind": "pii",
@@ -186,25 +438,60 @@
       "pattern": "\\b(?:4\\d{12}(?:\\d{3})?|5[1-5]\\d{14}|62\\d{14,17})\\b"
     },
     {
+      "id": "us-ssn",
+      "title": "美国 SSN",
+      "kind": "pii",
+      "severity": "high",
+      "pattern": "\\b(?!000|666|9\\d\\d)\\d{3}-(?!00)\\d{2}-(?!0000)\\d{4}\\b"
+    },
+    {
+      "id": "iban",
+      "title": "IBAN",
+      "kind": "pii",
+      "severity": "medium",
+      "pattern": "\\b(DE|FR|GB|NL|ES|IT|CH|SE|AT|BE|PL|IE|FI|DK|NO|PT|CZ|GR|HU|RO)\\d{2}[A-Z0-9]{11,30}\\b"
+    },
+    {
+      "id": "cn-plate",
+      "title": "车牌号",
+      "kind": "pii",
+      "severity": "low",
+      "pattern": "[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-HJ-NP-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳]"
+    },
+    {
       "id": "student-id",
       "title": "学号/工号字段",
       "kind": "pii",
       "severity": "medium",
-      "pattern": "(?i)\\b(学号|工号|student[_-]?id|employee[_-]?id)\\b\\s*[:：=]?\\s*[A-Za-z0-9]{5,}"
+      "pattern": "(?i)\\b(学号|工号|员工号|student[_-]?id|employee[_-]?id)\\b\\s*[:：=]?\\s*[A-Za-z0-9]{5,}"
     },
     {
       "id": "real-name-field",
       "title": "真实姓名字段",
       "kind": "pii",
       "severity": "medium",
-      "pattern": "(?i)\\b(真实姓名|姓名|real[_-]?name|full[_-]?name)\\b\\s*[:：=]\\s*[^\\s,;\"']{2,}"
+      "pattern": "(?i)\\b(真实姓名|姓名|收件人|real[_-]?name|full[_-]?name|contact[_-]?name)\\b\\s*[:：=]\\s*[^\\s,;\"']{2,}"
     },
     {
       "id": "address-field",
       "title": "地址字段",
       "kind": "pii",
+      "severity": "medium",
+      "pattern": "(?i)\\b(地址|住址|家庭住址|收货地址|address|street)\\b\\s*[:：=]\\s*[^\\s,;\"']{6,}"
+    },
+    {
+      "id": "passport-field",
+      "title": "护照/证件号字段",
+      "kind": "pii",
+      "severity": "high",
+      "pattern": "(?i)\\b(护照|passport|证件号|驾驶证|驾照|医保卡|社保号)\\b\\s*[:：=]?\\s*[A-Z0-9]{6,}"
+    },
+    {
+      "id": "im-account-field",
+      "title": "IM 账号字段（QQ/微信）",
+      "kind": "pii",
       "severity": "low",
-      "pattern": "(?i)\\b(地址|住址|家庭住址|address)\\b\\s*[:：=]\\s*[^\\s,;\"']{6,}"
+      "pattern": "(?i)\\b(qq|qq号|微信|wechat|weixin|微信号)\\b\\s*[:：=]?\\s*[A-Za-z0-9_\\-]{5,}"
     },
     {
       "id": "private-ip",
@@ -222,11 +509,50 @@
       "pattern": "(?i)(?<!\\.)\\b[a-z0-9\\-]{3,}\\.(internal|corp|lan|intra|local)\\b"
     },
     {
-      "id": "windows-user-path",
-      "title": "本机用户名路径",
+      "id": "internal-api-endpoint",
+      "title": "内部 API/管理端点",
       "kind": "internal",
       "severity": "low",
-      "pattern": "(?i)[A-Z]:\\\\Users\\\\[^\\\\\\s\"']{2,}"
+      "pattern": "(?i)https?://[a-z0-9.\\-]*(intranet|admin|jenkins|gitlab|jira|confluence|nexus|harbor|grafana|kibana|zabbix|vpn|oa|erp)[a-z0-9.\\-]*[:/]"
+    },
+    {
+      "id": "unix-home-path",
+      "title": "Unix/macOS 绝对家目录路径",
+      "kind": "internal",
+      "severity": "medium",
+      "pattern": "/(home|Users)/[A-Za-z0-9._\\-]{2,}(/|\\b)|^/root/"
+    },
+    {
+      "id": "windows-user-path",
+      "title": "Windows 用户目录绝对路径（两种分隔符）",
+      "kind": "internal",
+      "severity": "medium",
+      "pattern": "(?i)[A-Z]:[\\\\/]Users[\\\\/][^\\\\/\\s\"']{2,}"
+    },
+    {
+      "id": "unc-or-wsl-path",
+      "title": "UNC / WSL / 网络共享路径",
+      "kind": "internal",
+      "severity": "low",
+      "comment": "严格形态：两个反斜杠 + 主机名(>=3) + 反斜杠 + 共享名(>=2，允许中文)；避免把代码里正则转义当成 UNC 路径",
+      "pattern": "(?i)\\\\\\\\[A-Za-z0-9$._\\-]{3,}\\\\[^\\s\\\\/:*?\"<>|]{2,}"
+    },
+    {
+      "id": "abs-other-drive-path",
+      "title": "其他盘符绝对路径（如 D:/…）",
+      "kind": "internal",
+      "severity": "low",
+      "comment": "只报非 C 盘，降低噪音；C 盘由 windows-user-path 负责",
+      "pattern": "(?i)\\b[D-Z]:[\\\\/](?!Windows|Program)[A-Za-z0-9._\\-]+[\\\\/][^\\s\"'<>|]{3,}"
+    },
+    {
+      "id": "high-entropy-token",
+      "title": "高熵长串（未知格式密钥）",
+      "kind": "secret",
+      "severity": "low",
+      "comment": "覆盖没有已知指纹的密钥；锁文件/压缩产物已排除，仍可能有噪音",
+      "pattern": "\\b[A-Za-z0-9+/=_\\-]{40,}\\b",
+      "requires_entropy": true
     }
   ],
   "path_rules": [
@@ -234,24 +560,48 @@
       "id": "credential-file",
       "title": "凭据类文件名",
       "severity": "high",
-      "pattern": "(?i)(^|[/\\\\])(\\.env(\\.[a-z0-9]+)?|\\.credentials\\.yaml|\\.credentials\\.yml|credentials\\.json|secrets?\\.(json|ya?ml|txt)|id_rsa|id_ed25519|\\.npmrc|\\.pypirc|\\.netrc|\\.git-credentials|\\.htpasswd)$"
+      "pattern": "(?i)(^|[/\\\\])(\\.env(\\.[a-z0-9]+)?|\\.credentials\\.(yaml|yml)|credentials\\.json|secrets?\\.(json|ya?ml|txt|env)|id_rsa|id_ed25519|id_ecdsa|id_dsa|\\.npmrc|\\.yarnrc(\\.yml)?|\\.pypirc|\\.netrc|\\.pgpass|\\.my\\.cnf|\\.git-credentials|\\.htpasswd|\\.gem/credentials)$"
+    },
+    {
+      "id": "cloud-credential-file",
+      "title": "云凭据/配置文件名",
+      "severity": "high",
+      "pattern": "(?i)(^|[/\\\\])(\\.aws[/\\\\]credentials|\\.aws[/\\\\]config|\\.config[/\\\\]gcloud[^/\\\\]*|\\.kube[/\\\\]config|kubeconfig[^/\\\\]*|\\.docker[/\\\\]config\\.json|\\.terraform[/\\\\]|\\.azure[/\\\\]|\\.aliyun[/\\\\]|\\.ssh[/\\\\]config|service[_-]account[^/\\\\]*\\.json)$"
+    },
+    {
+      "id": "iac-state",
+      "title": "IaC 状态文件（常含明文密钥）",
+      "severity": "high",
+      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*(\\.tfstate(\\.backup)?|\\.tfvars|terraform\\.tfstate\\.d|\\.auto\\.tfvars)$"
     },
     {
       "id": "private-key-file",
-      "title": "密钥/证书文件",
+      "title": "密钥/证书/密钥库文件",
       "severity": "high",
-      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(pem|p12|pfx|key|keystore|jks|kdbx)$"
+      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(pem|p12|pfx|key|keystore|jks|kdbx|ovpn|ppk|asc|gpg|wallet|dat)$"
     },
     {
-      "id": "bulk-personal-data",
-      "title": "批量个人数据文件",
+      "id": "browser-session-data",
+      "title": "浏览器/会话/抓包数据",
+      "severity": "high",
+      "pattern": "(?i)(^|[/\\\\])(cookies(\\.sqlite|\\.txt)?|Login Data|\\.?har|.*\\.pcap(ng)?|.*\\.session|.*\\.sqlite|.*\\.db|storage\\.json|local storage)$"
+    },
+    {
+      "id": "office-db-dump",
+      "title": "批量个人数据（表格/数据库/日志）",
       "severity": "medium",
-      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(xlsx|xls|csv|tsv|docx|pdf|sql|bak|dmp)$"
+      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(xlsx|xls|xlsm|ods|csv|tsv|docx|doc|pdf|sql|dump|bak|mdb|accdb|parquet|jsonl|log)$"
     }
   ],
   "skip_scan_extensions": [
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".mp3", ".mp4", ".wav",
-    ".zip", ".7z", ".rar", ".gz", ".tar", ".exe", ".dll", ".so", ".dylib", ".bin",
-    ".woff", ".woff2", ".ttf", ".otf", ".class", ".jar", ".pyc", ".node"
-  ]
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff",
+    ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".class", ".pyc", ".o", ".a", ".lib", ".node",
+    ".pdf"
+  ],
+  "archive_scan_extensions": [".zip", ".jar", ".whl", ".xlsx", ".docx", ".pptx", ".epub", ".apk", ".nupkg"],
+  "archive_inner_scan_extensions": [".xml", ".rels", ".txt", ".csv", ".json", ".md", ".html", ".sql", ".env", ".yaml", ".yml", ".properties", ".ini", ".conf", ".pem", ".key"],
+  "archive_max_entries": 40,
+  "archive_max_entry_bytes": 131072
 }
