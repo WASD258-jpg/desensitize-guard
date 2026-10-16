@@ -620,6 +620,35 @@ def scan_files(rules: dict, paths: list[str]) -> list[dict]:
 MAX_FULL_SCAN_FILES = 300
 
 
+def content_fingerprint(change: dict, files: list[str], command: str) -> str:
+    """把"这次到底要发什么"折算成指纹：diff / 逐提交补丁 / 身份 / 文件清单 / 本地文件内容。
+
+    token 绑定它，意味着"确认过的那一份内容"才放行；内容一变（多一个提交、改一行、
+    换一个上传文件）指纹就变，必须重新询问。
+    """
+    digest = hashlib.sha256()
+    digest.update((" ".join(files) + "\n").encode("utf-8", errors="replace"))
+    digest.update((change.get("text", "") or "")[:MAX_DIFF_BYTES].encode("utf-8", errors="replace"))
+    digest.update((change.get("source", "") or "").encode("utf-8", errors="replace"))
+    digest.update("\n".join(change.get("files", [])[:MAX_FULL_SCAN_FILES]).encode("utf-8", errors="replace"))
+    digest.update("\n".join(change.get("identities", [])).encode("utf-8", errors="replace"))
+    for label, text in change.get("extras", []):
+        digest.update(label.encode("utf-8", errors="replace"))
+        digest.update((text or "")[:MAX_DIFF_BYTES].encode("utf-8", errors="replace"))
+    for item in files:
+        path = Path(item)
+        try:
+            stat = path.stat()
+            digest.update(f"{path}:{stat.st_size}:{int(stat.st_mtime)}".encode("utf-8", errors="replace"))
+            if stat.st_size <= MAX_FILE_BYTES:
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
+        except OSError:
+            continue
+    if change.get("full_scan"):
+        digest.update(("整仓首次出网" + command).encode("utf-8", errors="replace"))
+    return digest.hexdigest()[:24]
+
+
 def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
     # 环境相关规则（本机用户名/家目录/主机名/工作区路径）只能在运行时按当前环境生成
     rules = {**rules, "sensitive": rules["sensitive"] + runtime_sensitive_rules(cwd)}
@@ -680,6 +709,7 @@ def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
     counts = {"high": 0, "medium": 0, "low": 0}
     for finding in deduped:
         counts[finding["severity"]] = counts.get(finding["severity"], 0) + 1
+    fingerprint = content_fingerprint(change, files, command)
     return {
         "tool_name": tool_name,
         "command": command,
@@ -695,7 +725,8 @@ def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
         "scan_surfaces": surfaces,
         "findings": deduped,
         "counts": counts,
-        "cmd_key": command_hash(command, change.get("root", "")),
+        "content_fingerprint": fingerprint,
+        "cmd_key": command_hash(command, f"{change.get('root', '')}|{change.get('source', '')}|{fingerprint}"),
     }
 
 

@@ -42,8 +42,9 @@
 
 1. **判定逻辑只有一份**：`scripts/desensitize_guard.py`。三端绑定都只是把它包成各自方言，避免行为漂移。
 2. **"询问"由宿主承担**，不靠模型自觉：dsh 走审批 UI、CC 走权限确认、Codex 走 deny + 模型提问。
-3. **放行靠 token 而不是改配置**：token 绑定"命令指纹 + 仓库根 + 有效期"，同一命令确认一次即可重试，
-   改一个字符就要重新确认。
+3. **放行靠 token 而不是改配置**：token 绑定"命令指纹 + 仓库根 + **内容指纹** + 有效期"。
+   内容指纹覆盖净值 diff、逐提交补丁、身份与 `.git/config`、命令行指向的本地文件内容（大小+mtime+sha256），
+   所以**同一条命令在 TTL 内换了内容也会重新询问**；回滚内容则指纹复原、原 token 继续有效。
 4. **hook 永不打断调用轮次**：脚本缺失、超时、payload 异常都按放行 + 警告处理（可用 `failClosed` 反转）。
 
 ## 三端能力矩阵（本机实测）
@@ -149,9 +150,15 @@ python $G hook --dialect claude|codex|dsh-native       # 供 hook/插件调用�
 - PII：中国身份证、手机号、座机、邮箱、银行卡、美国 SSN、IBAN、车牌、学号/工号、真实姓名、地址、护照/证件/社保字段、QQ/微信
 - 内网/位置：私网 IP、内部域名、内部治理端点（jenkins/gitlab/jira/grafana…）、Windows 用户目录（**两种分隔符**）、Unix/macOS 家目录、UNC/WSL 网络路径、其他盘符绝对路径
 - 文件类型：`.env*`、`.credentials.*`、`id_rsa`、`.npmrc/.pypirc/.netrc/.pgpass/.git-credentials`、`.aws/credentials`、`.kube/config`、`kubeconfig*`、`service-account*.json`、`.terraform/`、`*.tfstate/*.tfvars`、`*.pem/*.p12/*.pfx/*.key/*.jks/*.kdbx/*.ovpn`、浏览器 Cookies/`Login Data`/`*.har/*.pcap`、`*.xlsx/*.csv/*.sql/*.bak/*.docx/*.pdf/*.log`
-- 未知格式：高熵长串（≥40 位、≥3 类字符、香农熵 ≥4.2），锁文件/lockfile/min.js 已排除以降噪
+- 未知格式：高熵长串（≥40 位、**必须含数字**、≥3 类字符、香农熵 ≥4.2），锁文件/lockfile/min.js/`rules.json` 已排除以降噪
 
-**降噪机制**：行内 `desensitize-guard:allow` 豁免该行；`settings.ignore` 正则豁免（默认忽略 `example.com`/保留域名/`noreply@github.com`/含 `FIXTURE` 的合成值）；`settings.entropy_exclude_paths` 排除锁文件。
+**降噪机制**：
+
+- 行内 `desensitize-guard:allow` 豁免该行（用于"我确认这条 fixture 无风险"）。
+- `settings.ignore` 正则豁免，默认忽略：`example.com` 等保留域名、`*@(users.)noreply.github.com`（GitHub 官方私密邮箱）、含 `FIXTURE` 的合成值。
+- `settings.entropy_exclude_paths` 排除锁文件、压缩产物与规则文件自身。
+- 同一命中值跨扫描面重复出现时折叠为一行并标 `×N`，避免 diff / 逐提交补丁 / 文件行三重刷屏。
+- 高熵规则要求"含数字"，否则 `SendGrid/Mailgun/npm/PyPI/...` 这类文档串会被整段报成密钥。
 
 ```powershell
 # 验证覆盖度（21 项）与既有回归（22 项 + 集成 + 插件契约）
@@ -179,4 +186,8 @@ node .\scripts\verify_dsh_plugin.mjs
 - **非 git 出网依赖参数可解析**：`curl -F` / `-T` 这类能从命令行拿到路径；如果路径是运行时拼出来的（变量、脚本内生成），
   命令行里看不到就不在扫描面内。
 - **Git LFS 指针**：仓库里是 lfs 指针文件，真实内容在 `.git/lfs/objects`，当前不跟进去扫。
+- **状态目录别放进仓库**：放行 token 与审计默认在 `$DSH_HOME/desensitize-guard`；若把 `DESENSITIZE_GUARD_HOME`
+  指到仓库内，记得加进 `.gitignore`（否则 token/审计会被一起提交，且 `git reset --hard` 会把它冲掉）。
+- **指纹是"内容"绑定，不是"人"绑定**：任何能跑 `approve` 的进程都能落库放行；要防"模型自问自答"，
+  需把 `approve` 改成需要一次终端交互确认。
 
