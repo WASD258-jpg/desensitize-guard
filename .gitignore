@@ -1,0 +1,7 @@
+# 本机回滚副本与运行产物
+*.bak-*
+*.bak
+__pycache__/
+*.pyc
+.DS_Store
+desensitize-guard-verify/

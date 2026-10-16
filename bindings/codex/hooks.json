@@ -1,0 +1,19 @@
+{
+  "description": "desensitize-guard：出网动作（git push / 上传 / 发布 / 外发类 MCP）前先确认是否需要脱敏。__GUARD_DIR__ 由 install.ps1 替换为本机绝对路径。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"__GUARD_DIR__/scripts/desensitize_guard.py\" hook --dialect codex",
+            "commandWindows": "python \"__GUARD_DIR__/scripts/desensitize_guard.py\" hook --dialect codex",
+            "timeout": 30,
+            "statusMessage": "检查出网动作是否需要脱敏"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+# dsh bundle patch: 把本插件插进 profile 的 layer stack。
+- insert:
+    - id: desensitize-guard
+      name: 'dsh-desensitize-guard'

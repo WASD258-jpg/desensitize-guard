@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "comment": "出网动作判定 + 敏感内容模式。三端（dsh / Claude Code / Codex）共用同一份。",
+  "egress": [
+    {
+      "id": "git-push",
+      "title": "git push / 推送远端",
+      "pattern": "\\bgit\\b[^|;&]*?\\bpush\\b",
+      "severity": "high"
+    },
+    {
+      "id": "git-remote-add",
+      "title": "git remote 新增/改向 / lfs push",
+      "pattern": "\\bgit\\b[^|;&]*?\\b(remote\\s+(add|set-url)|lfs\\s+push|send-email\\s+--smtp)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "gh-upload",
+      "title": "GitHub CLI 上传/发布",
+      "pattern": "\\bgh\\b[^|;&]*?\\b(release\\s+(create|upload)|gist\\s+create|repo\\s+(create|fork)|pr\\s+create|api\\b[^|;&]*?(-X|--method)\\s*POST|upload)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "curl-upload",
+      "title": "curl/wget 上传文件或 POST 数据",
+      "pattern": "\\b(curl|wget)\\b[^|;&]*?(-T\\s|--upload-file|-F\\s|--form|--data-binary|--post-file|--data\\s+@|-d\\s*@)",
+      "severity": "high"
+    },
+    {
+      "id": "cloud-upload",
+      "title": "云存储 / 制品库上传",
+      "pattern": "\\b(aws|az|gcloud|gsutil|rclone|doctl|oci|aliyun|ossutil|coscmd|mc)\\b[^|;&]*?\\b(s3\\s+(cp|sync|mv)|cp|sync|copy|upload|put-object|storage\\s+(cp|rsync)|blob\\s+upload|oss\\s+cp|push)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "artifact-publish",
+      "title": "包/镜像/站点发布",
+      "pattern": "\\b(npm|pnpm|yarn|twine|poetry|cargo|docker|podman|vercel|netlify|firebase|surge|hexo|gem)\\b[^|;&]*?\\b(publish|push|deploy|release|upload)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "file-transfer",
+      "title": "scp/sftp/rsync/nc 直连传输",
+      "pattern": "\\b(scp|pscp|sftp|rsync|nc|ncat|netcat|ftp|tftp|smbclient|curl-upload)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "ps-upload",
+      "title": "PowerShell 上传/外发",
+      "pattern": "(?i)\\b(Invoke-RestMethod|Invoke-WebRequest|Start-BitsTransfer|Send-MailMessage|New-Object\\s+Net\\.WebClient|UploadFile|UploadString)\\b",
+      "severity": "high"
+    },
+    {
+      "id": "http-post-local",
+      "title": "本地文件 HTTP 外发",
+      "pattern": "(?i)(--upload|upload-file|POST\\s[^|;&]{0,200}\\.(zip|7z|tar|gz|json|csv|xlsx|docx|pdf|sql|bak|env|pem|key))",
+      "severity": "medium"
+    },
+    {
+      "id": "mcp-egress-fallback",
+      "title": "疑似外发类 MCP/第三方工具",
+      "pattern": "",
+      "severity": "medium",
+      "tool_name_pattern": "(?i)(upload|send[_-]?file|publish|post[_-]?(message|file)|gist|drive_(upload|create)|files?_?(upload|create)|webhook|mail|smtp|slack|telegram|discord|feishu|dingtalk|wecom)"
+    }
+  ],
+  "sensitive": [
+    {
+      "id": "openai-key",
+      "title": "OpenAI/兼容网关密钥",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "sk-[A-Za-z0-9_\\-]{16,}"
+    },
+    {
+      "id": "anthropic-key",
+      "title": "Anthropic 密钥",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "sk-ant-[A-Za-z0-9_\\-]{16,}"
+    },
+    {
+      "id": "github-token",
+      "title": "GitHub token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})"
+    },
+    {
+      "id": "aws-akid",
+      "title": "AWS Access Key ID",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "AKIA[0-9A-Z]{16}"
+    },
+    {
+      "id": "aws-secret",
+      "title": "AWS secret / 通用云密钥赋值",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(?i)aws_?(secret|access)_?key\\s*[:=]\\s*['\"]?[A-Za-z0-9/+=]{20,}"
+    },
+    {
+      "id": "slack-token",
+      "title": "Slack token",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "xox[baprs]-[A-Za-z0-9-]{10,}"
+    },
+    {
+      "id": "google-api-key",
+      "title": "Google API Key",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "AIza[0-9A-Za-z\\-_]{35}"
+    },
+    {
+      "id": "private-key-block",
+      "title": "私钥块（PEM）",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    },
+    {
+      "id": "jwt",
+      "title": "JWT / Bearer 凭证",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{6,})"
+    },
+    {
+      "id": "bearer-header",
+      "title": "Authorization: Bearer",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(?i)authorization\\s*:\\s*bearer\\s+[A-Za-z0-9._\\-]{12,}"
+    },
+    {
+      "id": "generic-secret-assign",
+      "title": "疑似密钥/口令赋值",
+      "kind": "secret",
+      "severity": "high",
+      "comment": "要求赋的值是 ≥12 位的无调用语法串，避免把 `token = find_token(x)` 这类代码当成密钥",
+      "pattern": "(?i)\\b(api[_-]?key|secret|token|passwd|password|pwd|access[_-]?key|client[_-]?secret|auth[_-]?token)\\b\\s*[:=]\\s*[\"']?[A-Za-z0-9/+=_\\-]{12,}"
+    },
+    {
+      "id": "db-url-credential",
+      "title": "带口令的连接串",
+      "kind": "secret",
+      "severity": "high",
+      "pattern": "(?i)(mysql|mariadb|postgres|postgresql|mongodb|redis|amqp|mssql)://[^\\s:@/]+:[^\\s@/]+@"
+    },
+    {
+      "id": "webhook-url",
+      "title": "群机器人 / Webhook 地址",
+      "kind": "secret",
+      "severity": "medium",
+      "pattern": "https://(discord(app)?\\.com/api/webhooks|open\\.feishu\\.cn/open-apis/bot|oapi\\.dingtalk\\.com/robot|hooks\\.slack\\.com)[^\\s\"']*"
+    },
+    {
+      "id": "cn-id-card",
+      "title": "中国身份证号",
+      "kind": "pii",
+      "severity": "high",
+      "pattern": "\\b[1-9]\\d{5}(19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[0-9Xx]\\b"
+    },
+    {
+      "id": "cn-phone",
+      "title": "手机号",
+      "kind": "pii",
+      "severity": "medium",
+      "pattern": "\\b1[3-9]\\d{9}\\b"
+    },
+    {
+      "id": "email",
+      "title": "邮箱地址",
+      "kind": "pii",
+      "severity": "medium",
+      "pattern": "\\b[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}\\b"
+    },
+    {
+      "id": "bank-card",
+      "title": "银行卡号",
+      "kind": "pii",
+      "severity": "high",
+      "pattern": "\\b(?:4\\d{12}(?:\\d{3})?|5[1-5]\\d{14}|62\\d{14,17})\\b"
+    },
+    {
+      "id": "student-id",
+      "title": "学号/工号字段",
+      "kind": "pii",
+      "severity": "medium",
+      "pattern": "(?i)\\b(学号|工号|student[_-]?id|employee[_-]?id)\\b\\s*[:：=]?\\s*[A-Za-z0-9]{5,}"
+    },
+    {
+      "id": "real-name-field",
+      "title": "真实姓名字段",
+      "kind": "pii",
+      "severity": "medium",
+      "pattern": "(?i)\\b(真实姓名|姓名|real[_-]?name|full[_-]?name)\\b\\s*[:：=]\\s*[^\\s,;\"']{2,}"
+    },
+    {
+      "id": "address-field",
+      "title": "地址字段",
+      "kind": "pii",
+      "severity": "low",
+      "pattern": "(?i)\\b(地址|住址|家庭住址|address)\\b\\s*[:：=]\\s*[^\\s,;\"']{6,}"
+    },
+    {
+      "id": "private-ip",
+      "title": "内网 IP",
+      "kind": "internal",
+      "severity": "low",
+      "pattern": "\\b(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3})\\b"
+    },
+    {
+      "id": "internal-host",
+      "title": "内部域名/主机名",
+      "kind": "internal",
+      "severity": "low",
+      "comment": "用 (?<!\\.) 避免把 .env.local 这类文件名误判成内部域名",
+      "pattern": "(?i)(?<!\\.)\\b[a-z0-9\\-]{3,}\\.(internal|corp|lan|intra|local)\\b"
+    },
+    {
+      "id": "windows-user-path",
+      "title": "本机用户名路径",
+      "kind": "internal",
+      "severity": "low",
+      "pattern": "(?i)[A-Z]:\\\\Users\\\\[^\\\\\\s\"']{2,}"
+    }
+  ],
+  "path_rules": [
+    {
+      "id": "credential-file",
+      "title": "凭据类文件名",
+      "severity": "high",
+      "pattern": "(?i)(^|[/\\\\])(\\.env(\\.[a-z0-9]+)?|\\.credentials\\.yaml|\\.credentials\\.yml|credentials\\.json|secrets?\\.(json|ya?ml|txt)|id_rsa|id_ed25519|\\.npmrc|\\.pypirc|\\.netrc|\\.git-credentials|\\.htpasswd)$"
+    },
+    {
+      "id": "private-key-file",
+      "title": "密钥/证书文件",
+      "severity": "high",
+      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(pem|p12|pfx|key|keystore|jks|kdbx)$"
+    },
+    {
+      "id": "bulk-personal-data",
+      "title": "批量个人数据文件",
+      "severity": "medium",
+      "pattern": "(?i)(^|[/\\\\])[^/\\\\]*\\.(xlsx|xls|csv|tsv|docx|pdf|sql|bak|dmp)$"
+    }
+  ],
+  "skip_scan_extensions": [
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".mp3", ".mp4", ".wav",
+    ".zip", ".7z", ".rar", ".gz", ".tar", ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".woff", ".woff2", ".ttf", ".otf", ".class", ".jar", ".pyc", ".node"
+  ]
+}

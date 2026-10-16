@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|pwsh|bash|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"__GUARD_DIR__/scripts/desensitize_guard.py\" hook --dialect claude",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

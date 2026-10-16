@@ -1,0 +1,26 @@
+{
+  "name": "dsh-desensitize-guard",
+  "version": "0.1.0",
+  "description": "DSH 原生闸门：在 git push / 上传 / 发布等出网动作前，用宿主审批 UI 询问用户是否需要脱敏。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "desensitize",
+    "guard"
+  ],
+  "license": "MIT"
+}

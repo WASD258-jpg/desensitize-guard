@@ -1,0 +1,8 @@
+interface:
+  display_name: "Desensitize Guard"
+  short_description: "出网/推送前先问用户是否需要脱敏"
+  brand_color: "#B45309"
+  default_prompt: "Use $desensitize-guard to check whether this push or upload needs desensitization, ask me first, then continue."
+
+policy:
+  allow_implicit_invocation: true
