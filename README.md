@@ -93,13 +93,14 @@ pwsh -File .\uninstall.ps1 -PurgeState  # 一并删除
 
 ## 验证
 
-三套可复跑的验证，均已在 Windows + Python 3.13 + Node 22 下全绿：
+四套可复跑的验证，均已在 Windows + Python 3.13 + Node 22 下全绿（共 71 项断言）：
 
 ```powershell
 python .\scripts\desensitize_guard.py selftest      # 5 条规则用例
-pwsh -File .\scripts\verify_guard.ps1               # 22 项：三端方言/拦截/放行/确认流程/模式/扫描
-pwsh -File .\scripts\verify_integration.ps1         # 真实 git 仓库 fixture：出网内容扫描 + 确认改变决策
-node .\scripts\verify_dsh_plugin.mjs                # 插件与判定引擎的对接契约
+pwsh -File .\scripts\verify_guard.ps1               # 25 项：三端方言/拦截/放行/确认流程/模式/敏感扫描
+pwsh -File .\scripts\verify_integration.ps1         # 10 项：真实 git 仓库 fixture —— 出网内容扫描 + 确认改变决策
+pwsh -File .\scripts\verify_coverage.ps1            # 28 项：覆盖度 —— 密钥指纹/绝对路径/压缩包/加了又删/身份/高熵/降噪
+node .\scripts\verify_dsh_plugin.mjs                # 8 项：插件与判定引擎的对接契约
 ```
 
 `verify_integration.ps1` 会现搭一个临时仓库、提交含 `sk-…`、手机号、身份证号、`.env.local` 的改动，
@@ -161,7 +162,7 @@ python $G hook --dialect claude|codex|dsh-native       # 供 hook/插件调用�
 - 高熵规则要求"含数字"，否则 `SendGrid/Mailgun/npm/PyPI/...` 这类文档串会被整段报成密钥。
 
 ```powershell
-# 验证覆盖度（21 项）与既有回归（22 项 + 集成 + 插件契约）
+# 覆盖度 28 项 + 方言流程 25 项 + 集成 10 项 + 插件契约 8 项 = 71 项断言
 pwsh -File .\scripts\verify_coverage.ps1
 pwsh -File .\scripts\verify_guard.ps1
 pwsh -File .\scripts\verify_integration.ps1
